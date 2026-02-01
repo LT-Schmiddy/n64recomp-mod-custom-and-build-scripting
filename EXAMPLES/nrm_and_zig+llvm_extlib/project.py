@@ -19,7 +19,7 @@ from modbuildcore.jobs import *
 downloads: dict[str, DownloadJob] = {}
 archive_extractions: dict[str, ArchiveExtractJob] = {}
 makefiles: dict[str, MakefileJob] = {}
-mod_tomls: dict[str, ModTomlJob] = {}
+mod_tomls: dict[str, ModToNRMJob] = {}
 cmake_build_groups: dict[str, dict[str, CMakeBuildJob]] = {}
 build_outputs: dict[str, BuildOutputJob] = {}
 thunderstore_packages: dict[str, ThunderstorePackageJob] = {}
@@ -57,8 +57,7 @@ archive_downloads_dir: Path = root_dir.joinpath("downloads")
 build_dir: Path = root_dir.joinpath("build")
 binaries_dir: Path = root_dir.joinpath("binaries")
 
-make_mips_compiler_path: Path = None
-make_mips_linker_path: Path = None
+llvmmips_bin_path: Path = None
 mod_tool_path: Path = None
 zig_dir_path: Path = None
 llvm_path: Path = None
@@ -90,11 +89,10 @@ def add_archive_download_and_extract(name: str, url: str, extract_dir: Path) -> 
 if platform.system() == "Windows":
     add_archive_download_and_extract(
         "llvmmips",
-        "https://github.com/LT-Schmiddy/n64recomp-clang/releases/download/shim-prerelease-0.1.0/N64RecompAndClangEssentials-ClangVersion21.1.6-MipsOnly-Windows-AMD64.zip",
+        "https://github.com/LT-Schmiddy/n64recomp-clang/releases/download/release-21.1.8/Windows-AMD64-ClangEssentialsAndN64Recomp-ClangVersion21.1.8-MipsOnly.zip",
         binaries_dir.joinpath("llvmmips_win")
     )
-    make_mips_compiler_path = binaries_dir.joinpath("llvmmips_win/nrs_bin/clang.exe")
-    make_mips_linker_path = binaries_dir.joinpath("llvmmips_win/nrs_bin/ld.lld.exe")
+    llvmmips_bin_path = binaries_dir.joinpath("llvmmips_win/nrs_bin")
     mod_tool_path = binaries_dir.joinpath("llvmmips_win/nrs_bin/RecompModTool.exe")
     
     add_archive_download_and_extract(
@@ -103,7 +101,8 @@ if platform.system() == "Windows":
         binaries_dir.joinpath("zig_win")
     )
     zig_dir_path = binaries_dir.joinpath("zig_win/zig-x86_64-windows-0.14.1")
-    
+    zig_bin_path = zig_dir_path.joinpath("zig.exe")
+
     add_archive_download_and_extract(
         "llvm",
         "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/clang+llvm-19.1.7-x86_64-pc-windows-msvc.tar.xz",
@@ -115,11 +114,10 @@ if platform.system() == "Windows":
 elif platform.system() == "Darwin":
     add_archive_download_and_extract(
         "llvmmips",
-        "https://github.com/LT-Schmiddy/n64recomp-clang/releases/download/shim-prerelease-0.1.0/N64RecompAndClangEssentials-ClangVersion21.1.6-MipsOnly-Darwin-arm64.tar.xz",
+        "https://github.com/LT-Schmiddy/n64recomp-clang/releases/download/release-21.1.8/Darwin-arm64-ClangEssentialsAndN64Recomp-ClangVersion21.1.8-MipsOnly.tar.xz",
         binaries_dir.joinpath("llvmmips_macos")
     )
-    make_mips_compiler_path = binaries_dir.joinpath("llvmmips_macos/nrs_bin/clang")
-    make_mips_linker_path = binaries_dir.joinpath("llvmmips_macos/nrs_bin/ld.lld")
+    llvmmips_bin_path = binaries_dir.joinpath("llvmmips_macos/nrs_bin")
     mod_tool_path = binaries_dir.joinpath("llvmmips_macos/nrs_bin/RecompModTool")
     
     add_archive_download_and_extract(
@@ -128,6 +126,7 @@ elif platform.system() == "Darwin":
         binaries_dir.joinpath("zig_macos")
     )
     zig_dir_path = binaries_dir.joinpath("zig_linux/zig-aarch64-macos-0.14.1")
+    zig_bin_path = zig_dir_path.joinpath("zig")
     
     add_archive_download_and_extract(
         "llvm",
@@ -139,12 +138,10 @@ elif platform.system() == "Darwin":
 else:
     add_archive_download_and_extract(
         "llvmmips",
-        "https://github.com/LT-Schmiddy/n64recomp-clang/releases/download/shim-prerelease-0.1.0/N64RecompAndClangEssentials-ClangVersion21.1.6-MipsOnly-Linux-x86_64.tar.xz",
+        "https://github.com/LT-Schmiddy/n64recomp-clang/releases/download/release-21.1.8/Linux-x86_64-ClangEssentialsAndN64Recomp-ClangVersion21.1.8-MipsOnly.tar.xz",
         binaries_dir.joinpath("llvmmips_linux")
     )
-    
-    make_mips_compiler_path = binaries_dir.joinpath("llvmmips_linux/nrs_bin/clang")
-    make_mips_linker_path = binaries_dir.joinpath("llvmmips_linux/nrs_bin/ld.lld")
+    llvmmips_bin_path = binaries_dir.joinpath("llvmmips_linux/nrs_bin")
     mod_tool_path = binaries_dir.joinpath("llvmmips_linux/nrs_bin/RecompModTool")
     
     add_archive_download_and_extract(
@@ -153,6 +150,7 @@ else:
          binaries_dir.joinpath("zig_linux")
     )
     zig_dir_path = binaries_dir.joinpath("zig_linux/zig-x86_64-linux-0.14.1")
+    zig_bin_path = binaries_dir.joinpath("zig")
     
     add_archive_download_and_extract(
         "llvm",
@@ -160,54 +158,9 @@ else:
         binaries_dir.joinpath("llvm_linux")
     )
     llvm_path = binaries_dir.joinpath("llvm_linux/LLVM-19.1.7-Linux-X64")
+    
 
-# Registering asset_archive extraction, and associated variables.
-assets_archive_path = root_dir.joinpath("assets_archive.zip")
-assets_extracted_path = root_dir.joinpath("assets_extracted/assets")
-assets_archive_job = ArchiveExtractJob(assets_archive_path, assets_extracted_path)
-archive_extractions['assets'] = assets_archive_job
-
-# ============== Mod Toml/.nrm Building ==============
-
-# Declaring the mod toml files to build. Note that we've not set up the makefile that will build the elf. We'll do that next.
-# Note that the mod toml job doesn't automatically find the RecompModTool. We'll need to pass that in ourselves.
-# ModTomlJob instances automatically register the resultant .nrm file as a mod_output_file. Therefore the .nrm will 
-# automatically be added to any build output folders or thunderstore packages that depend on this job.
-main_toml = ModTomlJob(mod_tool_path, root_dir.joinpath("mod.toml"))
-# The mod toml file is read when the job is first created. We now have access to all the information in the toml.
-
-# Declaring the makefile that will build our mod's elf binary. In this template, we've declared it second so that we can pass information
-# from the mod toml to the makefile job.
-main_makefile = MakefileJob(
-    root_dir.joinpath("mod_elf.mk"),
-    # We can pass information to the makefile here, by declaring additional environmental variables for make to use.
-    # Environmental variables are automatically added to the variable namespace in a makefile.
-    # This template uses a generalized makefile that could be configured to compile multiple mods by passing
-    # different environmental variables here. It's also set up to let us pass in the compiler and linker we want to use.
-    {
-        "_ELF_PATH": str(main_toml.get_elf_path()),
-        "_BUILD_DIR": str(main_toml.build_dir),
-        "_MIPS_CC": str(make_mips_compiler_path),
-        "_MIPS_LD": str(make_mips_linker_path),
-        "_SRC_DIR": "src/mod"
-    }
-)
-
-# We've set the makefile to use the MIPS-only clang and ld.lld that we downloaded and extracted (The 'llvmmips' DownloadJob and ArchiveExtractJob).
-# So, we'll mark this MakefileJob as depending on that ArchiveExtractJob. We don't need to mark it as depending on the DownloadJob,
-# since the ArchiveExtractJob already depends on the DownloadJob.
-# Also declaring dependency on the asset archive extraction job.
-main_makefile.depends_on([archive_extractions["llvmmips"], assets_archive_job])
-
-# Our toml file depends on the makefile to produce the mod elf, so we'll declare that dependency here.
-# It also depends on the RecompModTool we extracted from 'llvmmips', so we declare that dependency too.
-main_toml.depends_on([main_makefile, archive_extractions["llvmmips"]])
-
-# Adding both jobs to their respective dicts for direct invoking.
-mod_tomls['mod'] = main_toml
-makefiles['mod'] = main_makefile
-
-# ============== CMake/Extlib Compilation ==============
+    
 
 # A little helper function to prepend file paths to your environmental PATH argument.
 def prepend_to_env_path(to_append: Path) -> str:
@@ -218,19 +171,60 @@ def prepend_to_env_path(to_append: Path) -> str:
         env_path = str(i) + PATH_DELIMITER + env_path
     return env_path
 
+# ============== Mod Toml/.nrm Building ==============
+
+# Declaring the mod toml files to build. Note that we've not set up the makefile that will build the elf. We'll do that next.
+# Note that the mod toml job doesn't automatically find the RecompModTool. We'll need to pass that in ourselves.
+# ModTomlJob instances automatically register the resultant .nrm file as a mod_output_file. Therefore the .nrm will 
+# automatically be added to any build output folders or thunderstore packages that depend on this job.
+main_toml = ModToNRMJob(mod_tool_path, root_dir.joinpath("mod.toml"))
+# The mod toml file is read when the job is first created. We now have access to all the information in the toml.
+
+# Declaring the makefile that will build our mod's elf binary. In this template, we've declared it second so that we can pass information
+# from the mod toml to the makefile job.
+main_makefile = MakefileJob(
+    root_dir.joinpath("Makefile"),
+    # We can pass information to the makefile here, by declaring additional environmental variables for make to use.
+    # Environmental variables are automatically added to the variable namespace in a makefile.
+    # This template uses a generalized makefile that could be configured to compile multiple mods by passing
+    # different environmental variables here. It's also set up to let us pass in the compiler and linker we want to use.
+    {
+        "PATH": prepend_to_env_path([llvmmips_bin_path]),
+        "CC": str(llvmmips_bin_path.joinpath("clang")),
+        "LD": str(llvmmips_bin_path.joinpath("ld.lld")),
+    }
+)
+
+# We've set the makefile to use the MIPS-only clang and ld.lld that we downloaded and extracted (The 'llvmmips' DownloadJob and ArchiveExtractJob).
+# So, we'll mark this MakefileJob as depending on that ArchiveExtractJob. We don't need to mark it as depending on the DownloadJob,
+# since the ArchiveExtractJob already depends on the DownloadJob.
+main_makefile.depends_on([archive_extractions["llvmmips"]])
+
+# Our toml file depends on the makefile to produce the mod elf, so we'll declare that dependency here.
+# It also depends on the RecompModTool we extracted from 'llvmmips', so we declare that dependency too.
+main_toml.depends_on([main_makefile, archive_extractions["llvmmips"]])
+
+# Adding both jobs to their respective dicts for direct invoking.
+mod_tomls['mod'] = main_toml
+makefiles['mod'] = main_makefile
+
+
+# ============== CMake/Extlib Compilation ==============
+
 # The CMake project in this template is set up to recieve the name of the extlib it compiles from an environmental variable.
 # That way, we can have a single source for truth for the name, and changing it is easy.
 # We'll also need that name for some other declarations later, so we'll store it in a variable here.
 # This template reads the name of the first extlib declared in the main toml, and uses that as the CMake project name.
-extlib_name = main_toml.data["manifest"]["native_libraries"][0]["name"]
+# extlib_name = main_toml.data["manifest"]["native_libraries"][0]["name"]
+extlib_name = "test_extlib"
 
 # CMakeProjectConfig defines information that will be common between lots of CMakeBuildJob instances.
 extlib = CMakeProjectConfig(
     root_dir,
     {
-        # Unlike with the makefile, we're gonna prepend the ZIG directory to the PATH that CMake recieves.
+        # We're gonna prepend the ZIG directory to the PATH that CMake recieves.
         # I could probably things this way for the makefile as well...
-        "PATH": prepend_to_env_path([llvm_path.joinpath("bin"), zig_dir_path]),
+        "PATH": prepend_to_env_path([zig_dir_path, llvm_path]),
         "LIB_NAME": extlib_name # The actual environmental variable that CMake looks at for the extlib name
     }
 )
@@ -309,9 +303,10 @@ for group_key, group in cmake_build_groups.items():
 
 # So far, all the CMakeBuildJob groups have been for cross-compiling the extlib for Windows, Mac, and Linux (regardless of the host system).
 # In some cases, compiling without using Zig can be helpful for debugging, and the CMakePresets.json includes presets for compiling natively
-# via Clang. We'll make single-entry build groups for these native presets.
+# via LLVM. We'll make single-entry build groups for these native presets.
 
-# This version of project.py downloads LLVM for you.
+# Note that you must have Clang/LLVM installed on your system to use these presets. An alternate version of this project file exists that
+# can automatically download a complete LLVM archive for you (not recommended by default do to size), eliminating this need.
 
 # These are helper functions that will help determine the correct native presets and mod_output_files for your system.
 def native_preset_name(build_type: str):
@@ -441,5 +436,4 @@ clean_paths: list[Path] = [
 distclean_paths: list[Path] = [
     binaries_dir,
     archive_downloads_dir,
-    assets_extracted_path.parent
 ]

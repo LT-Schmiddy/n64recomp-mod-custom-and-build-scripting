@@ -21,9 +21,6 @@ except ImportError as e:
 
 ARG_SPLIT_CHAR = ","
 
-_built_tomls: list[ModTomlJob] = []
-_built_cmake_handlers: list[CMakeBuildJob] = []
-
 def print_task_header(*args, **kwargs): 
     print_color('green', "\n-> ", *args, **kwargs)
     
@@ -124,35 +121,65 @@ def makefile(c: Context, skip_dependencies: bool = False, name: str = None, list
 @task(
     help={
         'skip_dependencies': "Do not try to resolve dependency jobs.",
-        'name': f"Only build .nrm files from specific registered .toml files. " \
-            f"Names should be the keys used in `project.mod_tomls`, separated by '{ARG_SPLIT_CHAR}'.",
-        'path_fix': "EXPERIMENTAL (AND NOT ENDORSED BY WISEGUY)! Reconstructs the .nrm file " \
-            "after RecompModTool finishes in order to eliminate backslashes from filepaths.",
-        'list': f"List all ModTomlJob names in `project.mod_tomls`, then exit."
+        'name': f"Only generate specific registered .toml files. " \
+            f"Names should be the keys used in `project.tomls`, separated by '{ARG_SPLIT_CHAR}'.",
+        'list': f"List all GenerateTomlJob names in `project.tomls`, then exit."
     }
 )
-def nrm(c: Context, skip_dependencies: bool = False, name: str = None, path_fix: bool = p.nrm_path_fix_by_default, list: bool = False):
+def toml(c: Context, skip_dependencies: bool = False, name: str = None, list: bool = False):
     """
-    Builds .nrm files from .toml files, as specified in `project.mod_tomls`. The resultant .nrms are counted as 'mod_output_files'.
-    Entries in `project.mod_tomls` should be instances of `modbuildcore.makefiles.ModTomlJob`. 
+    Generate .toml files, as specified in `project.tomls`.
+    Entries in `project.tomls` should be instances of `modbuildcore.tomls.GenerateTomlJob`. 
     """
     if list:
-        print_task_header("Listing mod toml names:")
-        for key in p.mod_tomls.keys():
+        print_task_header("Listing mod .toml names:")
+        for key in p.tomls.keys():
+            print_fl(key)
+        return
+    
+    print_task_header("Generating .toml files...")
+    
+    toml_list : list[GenerateTomlJob] = None
+    if name is None:
+        toml_list = p.tomls.values()
+    else:
+        toml_list = [p.tomls[i] for i in name.split(ARG_SPLIT_CHAR)]
+    
+    for mod in toml_list:
+        mod.resolve(c, skip_dependencies)
+
+@task(
+    help={
+        'skip_dependencies': "Do not try to resolve dependency jobs.",
+        'name': f"Only generate specific registered .nrm files. " \
+            f"Names should be the keys used in `project.nrms`, separated by '{ARG_SPLIT_CHAR}'.",
+        'path_fix_force': "EXPERIMENTAL (AND NOT ENDORSED BY WISEGUY)! Reconstructs the .nrm file " \
+            "after RecompModTool finishes in order to eliminate backslashes from filepaths.",
+        'list': f"List all ModTomlJob names in `project.nrms`, then exit."
+    }
+)
+def nrm(c: Context, skip_dependencies: bool = False, name: str = None, path_fix_force: bool = False, list: bool = False):
+    """
+    Builds .nrm files, as specified in `project.nrms`. The resultant .nrms are counted as 'mod_output_files'.
+    Entries in `project.nrms` should be instances of `modbuildcore.tomls.ModToNRMJob`. 
+    """
+    if list:
+        print_task_header("Listing mod NRM names:")
+        for key in p.nrms.keys():
             print_fl(key)
         return
     
     print_task_header("Building NRM files...")
     
-    global _built_tomls
-    toml_list : list[ModTomlJob] = None
+    nrm_list : list[ModToNRMJob] = None
     if name is None:
-        toml_list = p.mod_tomls.values()
+        nrm_list = p.nrms.values()
     else:
-        toml_list = [p.mod_tomls[i] for i in name.split(ARG_SPLIT_CHAR)]
+        nrm_list = [p.nrms[i] for i in name.split(ARG_SPLIT_CHAR)]
     
-    for mod in toml_list:
-        mod.run_nrm_path_fix = path_fix
+    for mod in nrm_list:
+        if path_fix_force:
+            mod.nrm_path_fix = True
         mod.resolve(c, skip_dependencies)
 
 @task(help={
@@ -178,7 +205,6 @@ def cmake(c: Context, skip_dependencies: bool = False, group_name: str = None, b
         return
     
     print_task_header("Running CMake builds:")
-    global _built_cmake_handlers
     
     selected_groups: dict[str, dict[str, CMakeBuildJob]] = {}
 
@@ -234,7 +260,6 @@ def build(c: Context, skip_dependencies: bool = False, unresolved_jobs: bool = F
         test_dir.include_unresolved_jobs = unresolved_jobs
         test_dir.include_all_resolved_jobs = all_resolved_jobs
         test_dir.resolve(c, skip_dependencies)
-
 
 @task(
     help={
@@ -308,7 +333,7 @@ def thunderstore(c: Context, skip_dependencies: bool = False, name: str = None, 
 
 
 @task (
-    pre=[download, extract, makefile, nrm, cmake, build, thunderstore]
+    pre=[download, extract, makefile, toml, nrm, cmake, build, thunderstore]
 )
 def all(c: Context):
     """
