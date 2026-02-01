@@ -19,7 +19,7 @@ from modbuildcore.jobs import *
 downloads: dict[str, DownloadJob] = {}
 archive_extractions: dict[str, ArchiveExtractJob] = {}
 makefiles: dict[str, MakefileJob] = {}
-mod_tomls: dict[str, ModTomlJob] = {}
+mod_tomls: dict[str, ModToNRMJob] = {}
 cmake_build_groups: dict[str, dict[str, CMakeBuildJob]] = {}
 build_outputs: dict[str, BuildOutputJob] = {}
 thunderstore_packages: dict[str, ThunderstorePackageJob] = {}
@@ -58,8 +58,6 @@ build_dir: Path = root_dir.joinpath("build")
 binaries_dir: Path = root_dir.joinpath("binaries")
 
 llvmmips_bin_path: Path = None
-make_mips_compiler_path: Path = None
-make_mips_linker_path: Path = None
 mod_tool_path: Path = None
 zig_dir_path: Path = None
 llvm_path: Path = None
@@ -98,6 +96,14 @@ if platform.system() == "Windows":
     llvmmips_bin_path = binaries_dir.joinpath("llvmmips_win/nrs_bin")
     mod_tool_path = binaries_dir.joinpath("llvmmips_win/nrs_bin/RecompModTool.exe")
     
+    add_archive_download_and_extract(
+        "zig",
+        "https://ziglang.org/download/0.14.1/zig-x86_64-windows-0.14.1.zip",
+        binaries_dir.joinpath("zig_win")
+    )
+    zig_dir_path = binaries_dir.joinpath("zig_win/zig-x86_64-windows-0.14.1")
+    zig_bin_path = zig_dir_path.joinpath("zig.exe")
+    
 elif platform.system() == "Darwin":
     add_archive_download_and_extract(
         "llvmmips",
@@ -108,6 +114,14 @@ elif platform.system() == "Darwin":
     llvmmips_bin_path = binaries_dir.joinpath("llvmmips_macos/nrs_bin")
     mod_tool_path = binaries_dir.joinpath("llvmmips_macos/nrs_bin/RecompModTool")
     
+    add_archive_download_and_extract(
+        "zig",
+        "https://ziglang.org/download/0.14.1/zig-aarch64-macos-0.14.1.tar.xz",
+        binaries_dir.joinpath("zig_macos")
+    )
+    zig_dir_path = binaries_dir.joinpath("zig_linux/zig-aarch64-macos-0.14.1")
+    zig_bin_path = zig_dir_path.joinpath("zig")
+    
 else:
     add_archive_download_and_extract(
         "llvmmips",
@@ -115,9 +129,18 @@ else:
         "https://github.com/LT-Schmiddy/n64recomp-clang/releases/download/release-21.1.8/Linux-x86_64-ClangEssentialsAndN64Recomp-ClangVersion21.1.8-MipsOnly.tar.xz",
         binaries_dir.joinpath("llvmmips_linux")
     )
-    
     llvmmips_bin_path = binaries_dir.joinpath("llvmmips_linux/nrs_bin")
     mod_tool_path = binaries_dir.joinpath("llvmmips_linux/nrs_bin/RecompModTool")
+    
+    add_archive_download_and_extract(
+        "zig",
+        "https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz",
+         binaries_dir.joinpath("zig_linux")
+    )
+    zig_dir_path = binaries_dir.joinpath("zig_linux/zig-x86_64-linux-0.14.1")
+    zig_bin_path = binaries_dir.joinpath("zig")
+    
+
     
 
 # A little helper function to prepend file paths to your environmental PATH argument.
@@ -135,7 +158,7 @@ def prepend_to_env_path(to_append: Path) -> str:
 # Note that the mod toml job doesn't automatically find the RecompModTool. We'll need to pass that in ourselves.
 # ModTomlJob instances automatically register the resultant .nrm file as a mod_output_file. Therefore the .nrm will 
 # automatically be added to any build output folders or thunderstore packages that depend on this job.
-main_toml = ModTomlJob(mod_tool_path, root_dir.joinpath("mod.toml"))
+main_toml = ModToNRMJob(mod_tool_path, root_dir.joinpath("mod.toml"))
 # The mod toml file is read when the job is first created. We now have access to all the information in the toml.
 
 # Declaring the makefile that will build our mod's elf binary. In this template, we've declared it second so that we can pass information
@@ -148,8 +171,8 @@ main_makefile = MakefileJob(
     # different environmental variables here. It's also set up to let us pass in the compiler and linker we want to use.
     {
         "PATH": prepend_to_env_path([llvmmips_bin_path]),
-        "CC": str(make_mips_compiler_path),
-        "LD": str(make_mips_linker_path),
+        "CC": str(llvmmips_bin_path.joinpath("clang")),
+        "LD": str(llvmmips_bin_path.joinpath("ld.lld")),
     }
 )
 
@@ -166,6 +189,148 @@ main_toml.depends_on([main_makefile, archive_extractions["llvmmips"]])
 mod_tomls['mod'] = main_toml
 makefiles['mod'] = main_makefile
 
+
+# ============== CMake/Extlib Compilation ==============
+
+# The CMake project in this template is set up to recieve the name of the extlib it compiles from an environmental variable.
+# That way, we can have a single source for truth for the name, and changing it is easy.
+# We'll also need that name for some other declarations later, so we'll store it in a variable here.
+# This template reads the name of the first extlib declared in the main toml, and uses that as the CMake project name.
+# extlib_name = main_toml.data["manifest"]["native_libraries"][0]["name"]
+extlib_name = "test_extlib"
+
+# CMakeProjectConfig defines information that will be common between lots of CMakeBuildJob instances.
+extlib = CMakeProjectConfig(
+    root_dir,
+    {
+        # We're gonna prepend the ZIG directory to the PATH that CMake recieves.
+        # I could probably things this way for the makefile as well...
+        "PATH": prepend_to_env_path([zig_dir_path]),
+        "LIB_NAME": extlib_name # The actual environmental variable that CMake looks at for the extlib name
+    }
+)
+
+# While build jobs could be defined manually (passing in the configuration and build arguments directly to the CMakeBuildJob contructor),
+# This template features an extensive CMakePresets.json which contains all the different build variations, which is what we'll use.
+# With that in mind, this is a helper function that determines the output directories for the binaries that CMake will produce, following
+# the conventions in our preset file.
+def get_preset_lib_path(preset_name: str) -> Path:
+    global root_dir
+    return root_dir.joinpath(f"build/{preset_name}/lib")
+
+# Producing extlib binaries for Windows, Mac, and Linux will involve multiple invokations of CMake.
+# As a result, CMakeBuildJobs are organized into groups that can be run together.
+cmake_build_groups["Debug"] = {
+    #  CMakeBuildJob.from_preset_pair is a sort of alernate constructor where the CMake configure and build arguments will be
+    # automatically set to those that invoke CMake configure and build presets with the specified name(s). If only the 
+    # configure preset is specified (as is the case here), it will be assumed that the build preset will have the same name.
+    "Windows": CMakeBuildJob.from_preset_pair(extlib, {
+        # Unlike with ModTomlJobs, CMakeBuildJobs cannot automatically determine what mod_output_files they produce, so they need to be specified 
+        # manually in this dict. The format is the same as the `add_mod_output_files` method.
+            Path(f"{extlib_name}.dll"): get_preset_lib_path("zig-windows-x64-Debug").joinpath(f"lib{extlib_name}.dll"),
+            # Including the Windows debug symbols file...
+            Path(f"{extlib_name}.pdb"): get_preset_lib_path("zig-windows-x64-Debug").joinpath(f"lib{extlib_name}.pdb")
+        }, "zig-windows-x64-Debug"),
+    "Darwin": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.dylib"): get_preset_lib_path("zig-macos-aarch64-Debug").joinpath(f"lib{extlib_name}.dylib")
+        }, "zig-macos-aarch64-Debug"),
+    "Linux": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.so"): get_preset_lib_path("zig-linux-x64-Debug").joinpath(f"lib{extlib_name}.so")
+        }, "zig-linux-x64-Debug"),
+}
+
+# Admittely, this part of this file could probably be DRYer.
+cmake_build_groups["Release"] =  {
+    "Windows": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.dll"): get_preset_lib_path("zig-windows-x64-Release").joinpath(f"lib{extlib_name}.dll")
+        }, "zig-windows-x64-Release"),
+    "Darwin": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.dylib"): get_preset_lib_path("zig-macos-aarch64-Release").joinpath(f"lib{extlib_name}.dylib")
+        }, "zig-macos-aarch64-Release"),
+    "Linux": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.so"): get_preset_lib_path("zig-linux-x64-Release").joinpath(f"lib{extlib_name}.so")
+        }, "zig-linux-x64-Release"),
+}
+
+cmake_build_groups["RelWithDebInfo"] = {
+    "Windows": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.dll"): get_preset_lib_path("zig-windows-x64-RelWithDebInfo").joinpath(f"lib{extlib_name}.dll"),
+            Path(f"{extlib_name}.pdb"): get_preset_lib_path("zig-windows-x64-RelWithDebInfo").joinpath(f"lib{extlib_name}.pdb")
+        }, "zig-windows-x64-RelWithDebInfo"),
+    "Darwin": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.dylib"): get_preset_lib_path("zig-macos-aarch64-RelWithDebInfo").joinpath(f"lib{extlib_name}.dylib")
+        }, "zig-macos-aarch64-RelWithDebInfo"),
+    "Linux": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.so"): get_preset_lib_path("zig-linux-x64-RelWithDebInfo").joinpath(f"lib{extlib_name}.so")
+        }, "zig-linux-x64-RelWithDebInfo"),
+}
+
+cmake_build_groups["MinSizeRel"] = {
+    "Windows": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.dll"): get_preset_lib_path("zig-windows-x64-MinSizeRel").joinpath(f"lib{extlib_name}.dll")
+        }, "zig-windows-x64-MinSizeRel"),
+    "Darwin": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.dylib"): get_preset_lib_path("zig-macos-aarch64-MinSizeRel").joinpath(f"lib{extlib_name}.dylib")
+        }, "zig-macos-aarch64-MinSizeRel"),
+    "Linux": CMakeBuildJob.from_preset_pair(extlib, {
+            Path(f"{extlib_name}.so"): get_preset_lib_path("zig-linux-x64-MinSizeRel").joinpath(f"lib{extlib_name}.so")
+        }, "zig-linux-x64-MinSizeRel"),
+}
+
+# All of these presets use Zig, so we'll mark them all depending on the 'zig' extraction.
+for group_key, group in cmake_build_groups.items():
+    for build_key, build in group.items():
+        build.depends_on([archive_extractions["zig"]])
+
+# So far, all the CMakeBuildJob groups have been for cross-compiling the extlib for Windows, Mac, and Linux (regardless of the host system).
+# In some cases, compiling without using Zig can be helpful for debugging, and the CMakePresets.json includes presets for compiling natively
+# via LLVM. We'll make single-entry build groups for these native presets.
+
+# Note that you must have Clang/LLVM installed on your system to use these presets. An alternate version of this project file exists that
+# can automatically download a complete LLVM archive for you (not recommended by default do to size), eliminating this need.
+
+# These are helper functions that will help determine the correct native presets and mod_output_files for your system.
+def native_preset_name(build_type: str):
+    if platform.system() == "Windows":
+        return f"native-windows-x64-{build_type}"
+    if platform.system() == "Darwin":
+        return f"native-macos-aarch64-{build_type}"
+    if platform.system() == "Linux":
+        return f"native-linux-x64-{build_type}"
+
+def native_output_files(build_type: str) -> dict[Path, Path]:
+    preset_name = native_preset_name(build_type)
+    if platform.system() == "Windows":
+        win_base = {
+            Path(f"{extlib_name}.dll"): get_preset_lib_path(preset_name).joinpath(f"{extlib_name}.dll")
+        }
+        if build_type == "Debug" or build_type == "RelWithDebInfo":
+            win_base[Path(f"{extlib_name}.pdb")] = get_preset_lib_path(preset_name).joinpath(f"{extlib_name}.pdb")
+        return win_base
+    if platform.system() == "Darwin":
+        return {
+            Path(f"{extlib_name}.dylib"): get_preset_lib_path(preset_name).joinpath(f"{extlib_name}.dylib")
+        }
+    if platform.system() == "Linux":
+        return {
+            Path(f"{extlib_name}.so"): get_preset_lib_path(preset_name).joinpath(f"lib{extlib_name}.so")
+        }
+
+
+cmake_build_groups["native-Debug"] = {
+    "Native": CMakeBuildJob.from_preset_pair(extlib, native_output_files("Debug"), native_preset_name("Debug")),
+}
+cmake_build_groups["native-Release"] = {
+    "Native": CMakeBuildJob.from_preset_pair(extlib, native_output_files("Release"), native_preset_name("Release")),
+}
+cmake_build_groups["native-RelWithDebInfo"] = {
+    "Native": CMakeBuildJob.from_preset_pair(extlib, native_output_files("RelWithDebInfo"), native_preset_name("RelWithDebInfo")),
+}
+cmake_build_groups["native-MinSizeRel"] = {
+    "Native": CMakeBuildJob.from_preset_pair(extlib, native_output_files("MinSizeRel"), native_preset_name("MinSizeRel")),
+}
+
+
 # ============== Build Output and Packaging ==============
 
 # BuildOutputJobs are used to copy the mod_output_files from other jobs into a single, convenient directory. 
@@ -181,7 +346,7 @@ debug_test_dir = BuildOutputJob(root_dir.joinpath("test_env/mods"))
 # To include mod_output_files from other jobs in the build output, add those jobs as dependencies.
 debug_test_dir.depends_on([
     mod_tomls['mod'],
-])
+] + [i for i in cmake_build_groups["Debug"].values()])
 # You can also declare additional files to include using `debug_test_dir.add_mod_output_files(...)` method.
 
 # Updating build outputs is the default behavior of invoking `./modbuild.py` without arguments.
@@ -231,7 +396,7 @@ main_package = ThunderstorePackageJob(
 # To include mod_output_files from other jobs in the build output, add those jobs as dependencies.
 main_package.depends_on([
     mod_tomls['mod']
-])
+] + [i for i in cmake_build_groups["Release"].values()])
 # You can also declare additional files to include using `debug_test_dir.add_mod_output_files(...)` method.
 
 # If dependencies were set up correctly, invoking `./modbuild.py thunderstore` will run all jobs necessary to produce
