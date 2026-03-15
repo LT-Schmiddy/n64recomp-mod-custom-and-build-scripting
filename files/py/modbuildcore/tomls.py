@@ -3,7 +3,7 @@ from pathlib import Path
 
 from invoke import Context
 from .job_base import JobBase
-from .utils import invoke_subprocess_run, print_job_header
+from .utils import invoke_subprocess_run, print_job_header, print_fl
 from deep_dict_update import deep_dict_update
 
 class GenerateTomlJob(JobBase):
@@ -33,10 +33,11 @@ class ModToNRMJob(JobBase):
     toml_path: Path
     build_dir: Path
     delay_read: bool
-    
     nrm_path_fix: bool
+    inject_files: dict[Path, Path]
     
-    def __init__(self, mod_tool_path: Path, toml_path: Path, build_dir: Path = None, *, delay_read: bool = False, nrm_path_fix: bool = False):
+    def __init__(self, mod_tool_path: Path, toml_path: Path, build_dir: Path = None, 
+                 *, delay_read: bool = False, nrm_path_fix: bool = False, inject_files: dict[Path, Path] = None):
         super().__init__()
         self.mod_tool_path = mod_tool_path    
         self.toml_path = toml_path
@@ -47,6 +48,8 @@ class ModToNRMJob(JobBase):
             self.read_toml()
             
         self.nrm_path_fix = nrm_path_fix
+        self.inject_files = inject_files
+        
     
     def read_toml(self):
         self.data = toml.loads(self.toml_path.read_text())
@@ -80,8 +83,18 @@ class ModToNRMJob(JobBase):
         os.remove(self.get_output_path())
         os.rename(out_file_path, self.get_output_path())
         
+    def run_inject_files(self):
+        nrm_file = zipfile.ZipFile(self.get_output_path(), 'a', compression=zipfile.ZIP_DEFLATED)
+        
+        for zip_path, file_path in self.inject_files.items():
+            zip_path_string = str(zip_path).replace("\\", "/")
+            print_fl(f"NRM File Injection: '{str(file_path)}' as '{zip_path_string}'")
+            nrm_file.writestr(zip_path_string, file_path.read_bytes())
+        
+        nrm_file.close()
+    
     def run(self, c: Context):
-        print_job_header(f"Mod To NRM Job{' with Path Fix' if self.nrm_path_fix else ''}: {self.toml_path}")
+        print_job_header(f"Mod To NRM Job (Path Fix = {self.nrm_path_fix}, File Injection = {bool(self.inject_files)}): {self.toml_path}")
         
         if self.delay_read and self.data is None:
             self.read_toml()
@@ -92,3 +105,6 @@ class ModToNRMJob(JobBase):
         
         if self.nrm_path_fix:
             self.run_nrm_path_fix()
+            
+        if self.inject_files is not None:
+            self.run_inject_files()
