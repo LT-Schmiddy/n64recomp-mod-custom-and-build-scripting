@@ -10,5 +10,5 @@ If this example is in use, the following files/directories can be safely deleted
 * ./CMakeLists.txt
 * ./CMakePresets.json
 * ./zig_toolchain.cmake
-* ./include/extlib
-* ./src/extlib
+* ./extlib
+
